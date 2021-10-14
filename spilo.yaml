@@ -1,0 +1,303 @@
+################################################################################
+#
+# This file deploy Patroni cluster on Kubernetes. I tested it on IBM Cloud
+# Kubernetes (IKS) and a local cluster based on Vagrant/VirtualBox. However,
+# by default, this file is IKS ready.
+################################################################################
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  namespace: cf-db
+  name: cfdb-ccdb
+  labels:
+    application: cfdb-ccdb
+    dbinstance: cfdb-ccdb
+spec:
+  selector:
+    matchLabels:
+      application: cfdb-ccdb
+      dbinstance: cfdb-ccdb
+  replicas: 3
+  serviceName: cfdb-ccdb
+  template:
+    metadata:
+      labels:
+        application: cfdb-ccdb
+        dbinstance: cfdb-ccdb
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: dbinstance
+                operator: In
+                values:
+                - cfdb-ccdb
+            topologyKey: kubernetes.io/hostname
+      # service account that allows changing endpoints and assigning pod labels
+      # in the given namespace: https://kubernetes.io/docs/user-guide/service-accounts/
+      # not required unless you've changed the default service account in the namespace
+      # used to deploy Spilo
+      serviceAccountName: operator
+      initContainers:
+      - name: spilo-init
+        image: sasadangelo/spilo-init:0.0.1  # put the spilo-init image here
+        imagePullPolicy: IfNotPresent
+        volumeMounts:
+        - name: pgdata
+          mountPath: /home/postgres/pgdata
+        - name: certificates
+          mountPath: /home/postgres/pgdata/tmp-certs
+      containers:
+      - name: cfdb-ccdb
+        image: sasadangelo/spilo:0.0.4  # put the spilo image here
+        imagePullPolicy: IfNotPresent
+        #imagePullPolicy: Always
+        ports:
+        - containerPort: 8008
+          protocol: TCP
+        - containerPort: 5432
+          protocol: TCP
+        volumeMounts:
+        - name: pgdata
+          mountPath: /home/postgres/pgdata
+        #- name: pgbackrest-config
+        #  mountPath: /run/etc/pgbackrest.conf
+        #  subPath: pgbackrest.conf
+        envFrom:
+          - configMapRef:
+              name: spilo-config
+          - configMapRef:
+              name: pgbackrest-config
+        env:
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: RESTAPI_CONNECT_ADDRESS
+          value: "$(POD_NAME).cfdb-ccdb"
+        - name: PGPASSWORD_SUPERUSER
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: superuser-password
+        - name: PGPASSWORD_ADMIN
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: admin-password
+        - name: PGPASSWORD_STANDBY
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: replication-password
+        - name: SSL_CA
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: server-ca-cert
+        - name: SSL_CERTIFICATE
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: server-public-cert
+        - name: SSL_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: server-private-key
+        - name: SSL_RESTAPI_CA
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: rest-api-server-ca
+        - name: SSL_RESTAPI_CERTIFICATE
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: rest-api-server-certificate
+        - name: SSL_RESTAPI_PRIVATE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: rest-api-server-key
+        - name: PGB_REPO1_CIPHER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: pgb-repo1-cipher-password
+        - name: PGB_REPO1_S3_KEY
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: pgb-repo1-s3-key
+        - name: PGB_REPO1_S3_KEY_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: cfdb-ccdb
+              key: pgb-repo1-s3-key-secret
+        - name: SCOPE
+          value: cfdb-ccdb
+        - name: PGROOT
+          value: /home/postgres/pgdata/pgroot
+      terminationGracePeriodSeconds: 0
+      volumes:
+      - name: certificates
+        secret:
+          secretName: cfdb-ccdb
+          items:
+          - key: etcd-ca-cert
+            path: etcd.ca_cert
+            mode: 0644
+          - key: etcd-private-key
+            path: etcd.private_key
+            mode: 0600
+          - key: etcd-public-cert
+            path: etcd.public_cert
+            mode: 0644
+      #- name: pgbackrest-config
+      #  configMap:
+      #    name: pgbackrest-config
+      #    defaultMode: 0644
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        application: cfdb-ccdb
+        dbinstance: cfdb-ccdb
+      name: pgdata
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+      storageClassName: ibmc-vpc-block-5iops-tier
+
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  namespace: cf-db
+  name: cfdb-ccdb
+  labels:
+    application: cfdb-ccdb
+    dbinstance: cfdb-ccdb
+subsets: []
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: cf-db
+  name: cfdb-ccdb
+  labels:
+    application: cfdb-ccdb
+    dbinstance: cfdb-ccdb
+spec:
+  type: ClusterIP
+  ports:
+  - name: postgresql
+    port: 5432
+    targetPort: 5432
+
+---
+# headless service to avoid deletion of patronidemo-config endpoint
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: cf-db
+  name: cfdb-ccdb-config
+  labels:
+    application: cfdb-ccdb
+    dbinstance: cfdb-ccdb
+spec:
+  clusterIP: None
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: cf-db
+  name: operator
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: cf-db
+  name: operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+  # delete is required only for 'patronictl remove'
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - endpoints
+  verbs:
+  - get
+  - patch
+  - update
+  # the following three privileges are necessary only when using endpoints
+  - create
+  - list
+  - watch
+  # delete is required only for for 'patronictl remove'
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+# The following privilege is only necessary for creation of headless service
+# for patronidemo-config endpoint, in order to prevent cleaning it up by the
+# k8s master. You can avoid giving this privilege by explicitly creating the
+# service like it is done in this manifest (lines 160..169)
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  namespace: cf-db
+  name: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: operator
+subjects:
+- kind: ServiceAccount
+  name: operator
