@@ -1,23 +1,47 @@
+################################################################################
+#
+# This file deploy Patroni cluster on Kubernetes. I tested it on IBM Cloud
+# Kubernetes (IKS) and a local cluster based on Vagrant/VirtualBox.
+################################################################################
+# Originally, Kubernetes, was developed to run stateless applications. For this
+# kind of applications the Pods are essentially the same and there should not be
+# any distinction. Kubernetes uses Deployment resources to manage this kind of
+# applications. However, there are special kind of applications that have a state
+# like, for example, database. For this applications Kubernetes recommend to use
+# StatefulSet. StatefulSet are very similar to Deployments but the main difference
+# is that each Pod is identified by an index.
+#
+# When the cluster is created the pod/spilodemo-1 is not created until pod/spilodemo-0
+# is ready. During un update the cluster isupdated in reverse order (es. 2, 1, 0).
+# The StatefulSet is deployed in the "spilons" namespace.
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: &cluster_name zalandodemo01
+  namespace: spilons
+  name: &cluster_name spilodemo
   labels:
     application: spilo
     spilo-cluster: *cluster_name
 spec:
+  # Bind the StatefulSet with the Pod definition below
   selector:
     matchLabels:
       application: spilo
       spilo-cluster: *cluster_name
+  # The StatefulSet need to deploy three Spilo containers: a Primary and two Replicas.
   replicas: 3
   serviceName: *cluster_name
+  # Here start the Pod definition
   template:
+    # The labels that identify the Pods
     metadata:
       labels:
         application: spilo
         spilo-cluster: *cluster_name
     spec:
+      # Spilodemo for performance and High Availability (HA) reasons needs to run one Pod on a
+      # single Worker node. Then our deployment need to guarantee the Node Affinity.
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -26,7 +50,7 @@ spec:
               - key: spilo-cluster
                 operator: In
                 values:
-                - zalandodemo01
+                - spilodemo
             topologyKey: kubernetes.io/hostname
       # service account that allows changing endpoints and assigning pod labels
       # in the given namespace: https://kubernetes.io/docs/user-guide/service-accounts/
@@ -48,14 +72,6 @@ spec:
         env:
         - name: DCS_ENABLE_KUBERNETES_API
           value: 'true'
-#        - name: ETCD_HOST
-#          value: 'test-etcd.default.svc.cluster.local:2379' # where is your etcd?
-#        - name: WAL_S3_BUCKET
-#          value: example-spilo-dbaas
-#        - name: LOG_S3_BUCKET # may be the same as WAL_S3_BUCKET
-#          value: example-spilo-dbaas
-#        - name: BACKUP_SCHEDULE
-#          value: "00 01 * * *"
         - name: KUBERNETES_SCOPE_LABEL
           value: spilo-cluster
         - name: KUBERNETES_ROLE_LABEL
@@ -122,49 +138,68 @@ spec:
         requests:
           storage: 10Gi
       storageClassName: local-storage
----
-apiVersion: v1
-kind: Endpoints
-metadata:
-  name: &cluster_name zalandodemo01
-  labels:
-    application: spilo
-    spilo-cluster: *cluster_name
-subsets: []
 
+# This is the ClusterIP service used by Spilo to reference the Primary node.
+# The Service doesn't have any selector. This is expected because we want to create
+# a service with no Endpoint and the reason is explained in the Endpoint comment
+# below.
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: &cluster_name zalandodemo01
+  namespace: spilons
+  name: &cluster_name spilodemo
   labels:
     application: spilo
     spilo-cluster: *cluster_name
 spec:
-  clusterIP: None
-  #type: ClusterIP
+  type: ClusterIP
   ports:
   - name: postgresql
     port: 5432
     targetPort: 5432
 
-#---
-# headless service to avoid deletion of patronidemo-config endpoint
-#apiVersion: v1
-#kind: Service
-#metadata:
-#  name: zalandodemo01-config
-#  labels:
-#    application: spilo
-#    spilo-cluster: zalandodemo01
-#spec:
-#  clusterIP: None
+# This is the Endpoint associated with the ClusterIP service above. Kubernetes
+# binds it with the Service having the same name. Patroni will set up this Resource
+# with the IP of the Primary node and it will keep it up to date every time a
+# failover/switchover occurs.
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  namespace: spilons
+  name: &cluster_name spilodemo
+  labels:
+    application: spilo
+    spilo-cluster: *cluster_name
+subsets: []
+
+# This is a dummy Headless service to avoid deletion of cfdb-ccfdb endpoint.
+# Basically, Patroni has a feature: https://github.com/zalando/patroni/pull/958
+# that create a dummy service called $SCOPE-config, the reason is that Patroni
+# has no control on how YAML are written. For this reason, if and Endpoint exists
+# with no service K8s consider it orphan and remove it. For this reason, they create
+# this dummy service. However, in order it to work the Pod ervice account requires
+# "create" verbs for "service" resource.
+# If for some reason, Patroni cannot create it we decided to write it here manually.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: spilons
+  name: spilodemo-config
+  labels:
+    application: spilo
+    spilo-cluster: spilodemo
+spec:
+  clusterIP: None
 
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: &cluster_name zalandodemo01
+  namespace: spilons
+  name: &cluster_name spilodemo
   labels:
     application: spilo
     spilo-cluster: *cluster_name
@@ -178,12 +213,14 @@ data:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  namespace: spilons
   name: operator
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  namespace: spilons
   name: operator
 rules:
 - apiGroups:
@@ -238,6 +275,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
+  namespace: spilons
   name: operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
