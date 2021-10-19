@@ -69,29 +69,22 @@ spec:
         volumeMounts:
         - name: pgdata
           mountPath: /home/postgres/pgdata
+        # Spilo configuration is managed via environment variables. The following
+        # envFrom clause load the Spilo configuration.
+        envFrom:
+          - configMapRef:
+              name: spilo-config
         env:
-        - name: DCS_ENABLE_KUBERNETES_API
-          value: 'true'
-        - name: KUBERNETES_SCOPE_LABEL
-          value: spilo-cluster
-        - name: KUBERNETES_ROLE_LABEL
-          value: role
-        - name: SPILO_CONFIGURATION
-          value: | ## https://github.com/zalando/patroni#yaml-configuration
-            bootstrap:
-              initdb:
-                - auth-host: md5
-                - auth-local: trust
-        - name: POD_IP
-          valueFrom:
-            fieldRef:
-              apiVersion: v1
-              fieldPath: status.podIP
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
               apiVersion: v1
               fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
         - name: PGPASSWORD_SUPERUSER
           valueFrom:
             secretKeyRef:
