@@ -1,0 +1,4 @@
+namespace: cf-db
+
+resources:
+- iks

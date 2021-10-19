@@ -1,0 +1,32 @@
+namespace: spilons
+
+resources:
+- pv
+- ../iks
+
+
+patches:
+- patch: |-
+    - op: replace
+      path: "/spec/volumeClaimTemplates/0/spec/storageClassName"
+      value: "local-storage"
+  target:
+    kind: StatefulSet
+    namespace: spilons
+    name: spilodemo
+- patch: |-
+    - op: add
+      path: "/data/KUBERNETES_BYPASS_API_SERVICE"
+      value: "false"
+  target:
+    kind: ConfigMap
+    namespace: spilons
+    name: spilo-config
+- patch: |-
+    - op: add
+      path: "/data/KUBERNETES_SERVICE_HOST"
+      value: "10.96.0.1"
+  target:
+    kind: ConfigMap
+    namespace: spilons
+    name: spilo-config

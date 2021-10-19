@@ -19,26 +19,26 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   namespace: spilons
-  name: &cluster_name spilodemo
+  name: spilodemo
   labels:
     application: spilo
-    spilo-cluster: *cluster_name
+    spilo-cluster: spilodemo
 spec:
   # Bind the StatefulSet with the Pod definition below
   selector:
     matchLabels:
       application: spilo
-      spilo-cluster: *cluster_name
+      spilo-cluster: spilodemo
   # The StatefulSet need to deploy three Spilo containers: a Primary and two Replicas.
   replicas: 3
-  serviceName: *cluster_name
+  serviceName: spilodemo
   # Here start the Pod definition
   template:
     # The labels that identify the Pods
     metadata:
       labels:
         application: spilo
-        spilo-cluster: *cluster_name
+        spilo-cluster: spilodemo
     spec:
       # Spilodemo for performance and High Availability (HA) reasons needs to run one Pod on a
       # single Worker node. Then our deployment need to guarantee the Node Affinity.
@@ -58,7 +58,7 @@ spec:
       # used to deploy Spilo
       serviceAccountName: operator
       containers:
-      - name: *cluster_name
+      - name: spilodemo
         image: sasadangelo/spilo:0.0.4  # put the spilo image here
         imagePullPolicy: IfNotPresent
         ports:
@@ -88,22 +88,22 @@ spec:
         - name: PGPASSWORD_SUPERUSER
           valueFrom:
             secretKeyRef:
-              name: *cluster_name
+              name: spilodemo
               key: superuser-password
         - name: PGUSER_ADMIN
           value: superadmin
         - name: PGPASSWORD_ADMIN
           valueFrom:
             secretKeyRef:
-              name: *cluster_name
+              name: spilodemo
               key: admin-password
         - name: PGPASSWORD_STANDBY
           valueFrom:
             secretKeyRef:
-              name: *cluster_name
+              name: spilodemo
               key: replication-password
         - name: SCOPE
-          value: *cluster_name
+          value: spilodemo
         - name: PGROOT
           value: /home/postgres/pgdata/pgroot
       dnsPolicy: None
@@ -122,7 +122,7 @@ spec:
   - metadata:
       labels:
         application: spilo
-        spilo-cluster: *cluster_name
+        spilo-cluster: spilodemo
       name: pgdata
     spec:
       accessModes:
@@ -130,7 +130,7 @@ spec:
       resources:
         requests:
           storage: 10Gi
-      storageClassName: local-storage
+      storageClassName: ibmc-vpc-block-5iops-tier
 
 # This is the ClusterIP service used by Spilo to reference the Primary node.
 # The Service doesn't have any selector. This is expected because we want to create
@@ -141,10 +141,10 @@ apiVersion: v1
 kind: Service
 metadata:
   namespace: spilons
-  name: &cluster_name spilodemo
+  name: spilodemo
   labels:
     application: spilo
-    spilo-cluster: *cluster_name
+    spilo-cluster: spilodemo
 spec:
   type: ClusterIP
   ports:
@@ -161,10 +161,10 @@ apiVersion: v1
 kind: Endpoints
 metadata:
   namespace: spilons
-  name: &cluster_name spilodemo
+  name: spilodemo
   labels:
     application: spilo
-    spilo-cluster: *cluster_name
+    spilo-cluster: spilodemo
 subsets: []
 
 # This is a dummy Headless service to avoid deletion of cfdb-ccfdb endpoint.

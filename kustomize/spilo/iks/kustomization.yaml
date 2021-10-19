@@ -1,0 +1,7 @@
+namespace: spilons
+
+resources:
+- spilons.yaml
+- secret.yaml
+- config.yaml
+- spilo.yaml
